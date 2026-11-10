@@ -6,10 +6,14 @@ from rooms.serializers import RoomSerializer
 
 class RoomListView(generics.ListAPIView):
     serializer_class = RoomSerializer
-    queryset = Room.objects.none()  # TODO: replace with the actual catalogue
+    queryset = Room.objects.select_related('location').order_by('code')
 
     def get_queryset(self):
-        # TODO 2 (6 points): order by code, optionally filter city.
-        # Trim/ignore case; blank supplied city -> HTTP 400.
-        # Do not expose write methods.
-        return super().get_queryset()
+        queryset = super().get_queryset()
+        city = self.request.query_params.get('city')
+        if city is None:
+            return queryset
+        city = city.strip()
+        if not city:
+            raise ValidationError({'city': 'This parameter cannot be blank.'})
+        return queryset.filter(location__city__iexact=city)
