@@ -409,20 +409,29 @@ reste en **une seule requête**.
 
 **Fichier :** `rooms/reports.py`
 
+Toutes les valeurs montrées dans cette partie sont des **résultats réels**, obtenus en lançant le
+code sur la base du projet.
+
+### Le code complet
+
 ```python
+import json
+from django.db.models import Sum
+from rooms.models import Location, Room
+
 def export_city_summary(city: str) -> str:
-    if not isinstance(city, str) or not city.strip():
+    if not isinstance(city, str) or not city.strip():                      # 5.2
         raise ValueError('city must be a non-empty string')
-    requested = city.strip()
+    requested = city.strip()                                               # 5.3
 
-    location = Location.objects.filter(city__iexact=requested).first()
-    city_name = location.city if location else requested
+    location = Location.objects.filter(city__iexact=requested).first()     # 5.4
+    city_name = location.city if location else requested                   # 5.5
 
-    rooms = Room.objects.filter(location__city__iexact=requested)
-    total_capacity = rooms.aggregate(total=Sum('capacity'))['total'] or 0
-    room_codes = sorted(rooms.values_list('code', flat=True))
+    rooms = Room.objects.filter(location__city__iexact=requested)          # 5.6
+    total_capacity = rooms.aggregate(total=Sum('capacity'))['total'] or 0  # 5.7
+    room_codes = sorted(rooms.values_list('code', flat=True))              # 5.8
 
-    return json.dumps({
+    return json.dumps({                                                    # 5.9
         'city': city_name,
         'total_rooms': len(room_codes),
         'total_capacity': total_capacity,
@@ -430,31 +439,363 @@ def export_city_summary(city: str) -> str:
     })
 ```
 
-| Ligne | Sens |
+### 5.1 Ce que fait la fonction, en une phrase
+
+On lui donne un **nom de ville**, elle renvoie un **texte JSON** qui résume les salles de cette ville.
+
+| Appel | Résultat réel |
 |---|---|
-| `isinstance(city, str)` | vérifie que c'est bien du texte (refuse `None`, `13`…) |
-| `not city.strip()` | refuse `""` et `"   "` → `ValueError` |
-| `Location.objects.filter(city__iexact=…).first()` | cherche la ville sans tenir compte des majuscules ; `.first()` renvoie la première trouvée ou `None` |
-| `location.city if location else requested` | ville connue → son orthographe en base (`"Lyon"`) ; inconnue → le nom demandé nettoyé |
-| `Room.objects.filter(location__city__iexact=…)` | les salles de cette ville (même principe que la vue) |
-| `aggregate(total=Sum('capacity'))` | la base calcule la **somme** des capacités ; renvoie `{'total': 10}` |
-| `or 0` | s'il n'y a aucune salle, la somme vaut `None` → on met `0` |
-| `values_list('code', flat=True)` | récupère seulement les codes : `['lyo-desk', 'lyo-room']` |
-| `sorted(...)` | trie les codes de A à Z |
-| `json.dumps({...})` | transforme le dictionnaire Python en **texte JSON** |
+| `export_city_summary('Lyon')` | `{"city": "Lyon", "total_rooms": 2, "total_capacity": 10, "room_codes": ["lyo-desk", "lyo-room"]}` |
+| `export_city_summary('  lyon  ')` | `{"city": "Lyon", "total_rooms": 2, "total_capacity": 10, "room_codes": ["lyo-desk", "lyo-room"]}` |
+| `export_city_summary('PARIS')` | `{"city": "Paris", "total_rooms": 2, "total_capacity": 12, "room_codes": ["par-desk", "par-room"]}` |
+| `export_city_summary('Rennes')` | `{"city": "Rennes", "total_rooms": 0, "total_capacity": 0, "room_codes": []}` |
+| `export_city_summary('')`, `('   ')`, `(None)`, `(13)` | ❌ `ValueError: city must be a non-empty string` |
 
-Exemple pour `"  lyon  "` :
+`def export_city_summary(city: str) -> str:` se lit ainsi : « la fonction reçoit `city`, qui devrait
+être du texte (`: str`), et renvoie du texte (`-> str`) ». Ces indications sont des **notes pour les
+humains** : Python ne les vérifie pas tout seul. C'est pour ça qu'on vérifie nous-mêmes à l'étape 5.2.
 
-```json
-{"city": "Lyon", "total_rooms": 2, "total_capacity": 10, "room_codes": ["lyo-desk", "lyo-room"]}
+> **📌 Résumé 5.1** — Entrée : un nom de ville. Sortie : un texte JSON avec 4 clés
+> (`city`, `total_rooms`, `total_capacity`, `room_codes`). Entrée invalide → `ValueError`.
+
+---
+
+### 5.2 Vérifier l'entrée : `isinstance` et `strip`
+
+```python
+if not isinstance(city, str) or not city.strip():
+    raise ValueError('city must be a non-empty string')
 ```
 
-Pour `"Rennes"` : `{"city": "Rennes", "total_rooms": 0, "total_capacity": 0, "room_codes": []}`.
+Cette ligne pose **deux questions**, reliées par `or` (« ou »).
 
-La fonction ne fait que **lire** la base : aucune création, modification ni suppression.
+**Question A — `not isinstance(city, str)` : est-ce que ce n'est PAS du texte ?**
+
+`isinstance(valeur, type)` vérifie **de quel type** est une valeur. `str` (*string*) = le type texte.
+
+```python
+isinstance("Lyon", str)   # True  → c'est du texte
+isinstance(None, str)     # False → ce n'est pas du texte
+isinstance(13, str)       # False → c'est un nombre
+```
+
+**Question B — `not city.strip()` : est-ce que le texte est VIDE ?**
+
+`.strip()` enlève les espaces au début et à la fin. Un texte vide compte comme « faux » en Python.
+
+```python
+"".strip()        # → ""      → vide
+"   ".strip()     # → ""      → vide
+" Lyon ".strip()  # → "Lyon"  → pas vide
+```
+
+**Pourquoi la question A d'abord ? L'ordre compte.**
+
+Avec `or`, Python **s'arrête dès que la première condition est vraie** : il ne regarde pas la seconde.
+C'est indispensable, car `None.strip()` et `(13).strip()` **plantent** (`AttributeError`) : seul
+le texte possède la méthode `.strip()`.
+
+| `city` | A : pas du texte ? | B : vide ? | Résultat réel |
+|---|---|---|---|
+| `None` | ✅ oui → **stop** | *(pas évaluée)* | `ValueError` |
+| `13` | ✅ oui → **stop** | *(pas évaluée)* | `ValueError` |
+| `""` | non | ✅ oui | `ValueError` |
+| `"   "` | non | ✅ oui | `ValueError` |
+| `"  lyon  "` | non | non | ✅ on continue |
+
+**`raise ValueError(...)`**
+
+`raise` = « déclencher une erreur et **arrêter la fonction ici** ». `ValueError` est l'erreur standard
+de Python pour « valeur non acceptable ».
+
+| Où | Erreur utilisée | Pourquoi |
+|---|---|---|
+| Vue API (`views.py`) | `ValidationError` (DRF) | DRF la transforme en réponse HTTP **400** |
+| Rapport (`reports.py`) | `ValueError` (Python) | simple fonction Python, pas d'API |
+
+> **📌 Résumé 5.2** — On refuse ce qui n'est pas du texte (`None`, `13`) **puis** le texte vide
+> (`""`, `"   "`). La question « est-ce du texte ? » vient en premier pour ne jamais appeler
+> `.strip()` sur autre chose que du texte. Erreur → `ValueError`.
+
+---
+
+### 5.3 Nettoyer : `requested = city.strip()`
+
+```python
+requested = city.strip()
+```
+
+On garde la version **sans espaces** dans une nouvelle variable, `requested` (« demandée »).
+
+| Avant | Après |
+|---|---|
+| `"  lyon  "` | `"lyon"` |
+| `"PARIS"` | `"PARIS"` (les majuscules restent, seuls les espaces partent) |
+
+On n'arrive ici **que si** l'étape 5.2 est passée : `city` est forcément du texte non vide.
+
+> **📌 Résumé 5.3** — `requested` = le nom demandé, sans les espaces autour.
+
+---
+
+### 5.4 Chercher la ville en base : `filter(...).first()`
+
+```python
+location = Location.objects.filter(city__iexact=requested).first()
+```
+
+| Morceau | Sens |
+|---|---|
+| `Location.objects` | dans la table des villes… |
+| `.filter(city__iexact=requested)` | …celles dont le nom est égal à `requested`, **sans tenir compte des majuscules** |
+| `.first()` | …prends **la première**, ou `None` s'il n'y en a pas |
+
+Ici c'est `city__iexact` (et pas `location__city__iexact`) parce qu'on cherche **directement dans
+la table `Location`** : pas de lien à suivre.
+
+**Avant / après `.first()` (résultats réels) :**
+
+| Écriture | `'lyon'` | `'rennes'` |
+|---|---|---|
+| `.filter(...)` | `<QuerySet [<Location: Lyon>]>` (une **liste**) | `<QuerySet []>` (liste vide) |
+| `.filter(...).first()` | `Lyon` (**un seul objet**) | `None` |
+| `.get(...)` | `Lyon` | ❌ **plante** (`DoesNotExist`) |
+
+`.first()` donne le meilleur des deux : **un objet** si la ville existe, **`None`** sinon, sans erreur.
+
+> **📌 Résumé 5.4** — On cherche la ville sans tenir compte des majuscules. Résultat : l'objet
+> `Location` si elle existe, sinon `None` (pas de plantage, contrairement à `.get()`).
+
+---
+
+### 5.5 Choisir le nom à afficher : `... if ... else ...`
+
+```python
+city_name = location.city if location else requested
+```
+
+C'est un **« si… sinon » écrit sur une seule ligne** :
+
+```python
+resultat = VALEUR_SI_VRAI if CONDITION else VALEUR_SI_FAUX
+```
+
+Ça fait **exactement la même chose** que :
+
+```python
+if location:
+    city_name = location.city
+else:
+    city_name = requested
+```
+
+`if location` : un objet compte comme **vrai**, `None` compte comme **faux**. Donc la condition
+veut dire « si on a trouvé la ville en base ».
+
+| Demandé | `requested` | `location` | `city_name` |
+|---|---|---|---|
+| `"  lyon  "` | `"lyon"` | `Lyon` (trouvée) | **`"Lyon"`** (orthographe de la base) |
+| `"PARIS"` | `"PARIS"` | `Paris` (trouvée) | **`"Paris"`** |
+| `"Rennes"` | `"Rennes"` | `None` | **`"Rennes"`** (nom demandé) |
+
+**Pourquoi pas toujours `requested` ?** La consigne veut l'orthographe **de la base** : `"Lyon"`,
+pas `"lyon"`.
+**Pourquoi pas toujours `location.city` ?** Pour une ville inconnue, `location` vaut `None`, et
+`None.city` **plante**.
+
+> **📌 Résumé 5.5** — Ville trouvée → son orthographe officielle (`"Lyon"`). Ville inconnue → le
+> nom demandé, nettoyé (`"Rennes"`). Le `if location` évite le plantage `None.city`.
+
+---
+
+### 5.6 Les salles de la ville
+
+```python
+rooms = Room.objects.filter(location__city__iexact=requested)
+```
+
+Même principe que dans la vue API (voir 4.6) : `location__city` = « suis le lien vers `Location`,
+puis regarde `city` ». `iexact` = sans tenir compte des majuscules.
+
+| Ville | `rooms` (résultat réel : code, capacité) |
+|---|---|
+| Lyon | `lyo-desk` (4), `lyo-room` (6) |
+| Paris | `par-desk` (2), `par-room` (10) |
+| Nantes | `nan-room` (8) |
+| Rennes | *(aucune)* |
+
+La requête n'est **pas encore envoyée** à la base : elle partira aux étapes 5.7 et 5.8.
+
+> **📌 Résumé 5.6** — `rooms` = la requête « toutes les salles de cette ville », prête à être
+> utilisée pour calculer la somme et la liste des codes.
+
+---
+
+### 5.7 La somme des capacités : `aggregate(Sum(...))`
+
+```python
+total_capacity = rooms.aggregate(total=Sum('capacity'))['total'] or 0
+```
+
+| Morceau | Sens |
+|---|---|
+| `.aggregate(...)` | « fais **un calcul sur toutes les lignes** et renvoie **un seul résultat** » |
+| `Sum('capacity')` | additionne le champ `capacity` |
+| `total=` | le **nom** donné au résultat (au choix) |
+| `['total']` | récupère la valeur rangée sous ce nom |
+| `or 0` | si le résultat est `None`, mettre `0` |
+
+`aggregate` renvoie un **dictionnaire** (des paires nom → valeur), d'où le `['total']` pour en sortir
+le nombre. Le nom choisi (`total=`) et le nom lu (`['total']`) doivent être **identiques**.
+
+**`A or B`** = « prends `A`, sauf s'il compte comme faux ; dans ce cas prends `B` » :
+
+```python
+10 or 0     # → 10
+None or 0   # → 0
+```
+
+**Résultats réels étape par étape :**
+
+| Ville | `aggregate(total=Sum('capacity'))` | `['total']` | `or 0` → `total_capacity` |
+|---|---|---|---|
+| Lyon | `{'total': 10}` | `10` | **10** |
+| Paris | `{'total': 12}` | `12` | **12** |
+| Nantes | `{'total': 8}` | `8` | **8** |
+| Rennes | `{'total': None}` | `None` | **0** |
+
+Pour une ville sans salle, la base renvoie `None` (« rien à additionner »), pas `0`. Le `or 0`
+corrige ça pour que le JSON affiche `0` et non `null`.
+
+En SQL, Django envoie à peu près : `SELECT SUM(capacity) AS total FROM rooms_room JOIN rooms_location … WHERE city LIKE 'Lyon'`.
+C'est **la base** qui additionne. Une boucle Python (`sum(r.capacity for r in rooms)`) marcherait
+aussi, mais chargerait toutes les salles en mémoire ; la consigne demande une **agrégation ORM**.
+
+Autres calculs du même genre : `Count` (compter), `Avg` (moyenne), `Max`, `Min`.
+
+> **📌 Résumé 5.7** — `aggregate(total=Sum('capacity'))` → la base additionne et renvoie
+> `{'total': 10}`. `['total']` → `10`. `or 0` → transforme le `None` d'une ville vide en `0`.
+
+---
+
+### 5.8 La liste des codes : `values_list(..., flat=True)` et `sorted`
+
+```python
+room_codes = sorted(rooms.values_list('code', flat=True))
+```
+
+**① `values_list('code')` — seulement la colonne `code`**
+
+Au lieu d'objets `Room` complets, la base renvoie seulement les codes, chacun dans un **tuple**
+(une petite parenthèse) : `('par-desk',)`. Le tuple existe parce qu'on pourrait demander plusieurs
+colonnes : `values_list('code', 'name')` → `('par-desk', 'Focus desk')`.
+
+**② `flat=True` — enlever les parenthèses**
+
+| Sans `flat=True` | Avec `flat=True` |
+|---|---|
+| `[('par-desk',), ('par-room',)]` | `['par-desk', 'par-room']` |
+
+`flat=True` ne marche qu'avec **une seule colonne**.
+
+**③ `sorted(...)` — trier de A à Z**
+
+```python
+sorted(['par-room', 'par-desk', 'lyo-room'])
+# → ['lyo-room', 'par-desk', 'par-room']
+```
+
+`sorted` renvoie aussi une **vraie liste Python**, nécessaire pour `json.dumps` (qui ne sait pas
+convertir un queryset).
+
+**Résultats réels étape par étape :**
+
+| Ville | `values_list('code')` | `+ flat=True` | `sorted(...)` → `room_codes` |
+|---|---|---|---|
+| Paris | `[('par-desk',), ('par-room',)]` | `['par-desk', 'par-room']` | **`['par-desk', 'par-room']`** |
+| Rennes | `[]` | `[]` | **`[]`** |
+
+> **📌 Résumé 5.8** — `values_list('code', flat=True)` → la liste simple des codes.
+> `sorted(...)` → triée de A à Z, en vraie liste Python. Ville vide → `[]`.
+
+---
+
+### 5.9 Construire le JSON : `len` et `json.dumps`
+
+```python
+return json.dumps({
+    'city': city_name,
+    'total_rooms': len(room_codes),
+    'total_capacity': total_capacity,
+    'room_codes': room_codes,
+})
+```
+
+**Les accolades `{ ... }`** créent un **dictionnaire** Python : des paires `'clé': valeur`.
+
+**`len(room_codes)`** compte les éléments de la liste : `len(['lyo-desk', 'lyo-room'])` → `2`.
+On réutilise la liste des codes : pas besoin d'une requête de plus pour compter.
+
+**`json.dumps(...)`** transforme le dictionnaire Python en **texte JSON** (*dump string* = « écrire
+en texte »). Avant / après (résultat réel) :
+
+| | Type | Valeur |
+|---|---|---|
+| Avant `json.dumps` | `dict` (dictionnaire Python) | `{'city': 'Lyon', 'room_codes': ['a']}` |
+| Après `json.dumps` | `str` (texte) | `{"city": "Lyon", "room_codes": ["a"]}` |
+
+Remarquez : Python affiche des **apostrophes** `'`, le JSON utilise des **guillemets** `"`.
+Le JSON est un **texte universel**, lisible par n'importe quel langage (JavaScript, Java…).
+
+La consigne demande une **chaîne JSON**, pas un dictionnaire : le test vérifie
+`assertIsInstance(result, str)`, puis relit le texte avec `json.loads(result)`.
+
+**`return`** renvoie ce texte à celui qui a appelé la fonction.
+
+> **📌 Résumé 5.9** — On range les 4 résultats dans un dictionnaire, `len()` compte les salles,
+> `json.dumps()` transforme le tout en **texte JSON**, `return` le renvoie.
+
+---
+
+### 5.10 Ce que la fonction ne fait PAS
+
+- **Aucune écriture en base** : seulement `filter`, `first`, `aggregate`, `values_list` (lectures).
+  Le test `test_report_is_read_only` compte les salles avant/après : le nombre ne change pas.
+- **Aucune valeur écrite en dur** : tout vient de la base (si on ajoute une salle à Lyon, le
+  rapport change tout seul).
 
 > Remarque : la consigne de la tâche parle de `room_count`, mais les tests et le README attendent
 > `total_rooms`. C'est `total_rooms` qui est utilisé, pour que les tests passent.
+
+---
+
+### 5.11 📋 Résumé général de la tâche 4
+
+| Étape | Code | Rôle | Exemple (`"  lyon  "`) |
+|---|---|---|---|
+| 5.2 | `isinstance(city, str)` / `city.strip()` | refuser ce qui n'est pas du texte, puis le vide | passe ✅ |
+| 5.3 | `requested = city.strip()` | enlever les espaces | `"lyon"` |
+| 5.4 | `Location…filter(city__iexact=…).first()` | trouver la ville, ou `None` | `Lyon` |
+| 5.5 | `location.city if location else requested` | orthographe officielle ou nom demandé | `"Lyon"` |
+| 5.6 | `Room…filter(location__city__iexact=…)` | les salles de la ville | `lyo-desk`, `lyo-room` |
+| 5.7 | `aggregate(total=Sum('capacity'))['total'] or 0` | somme des capacités | `10` |
+| 5.8 | `sorted(values_list('code', flat=True))` | codes triés | `['lyo-desk', 'lyo-room']` |
+| 5.9 | `json.dumps({...})` | tout transformer en texte JSON | `{"city": "Lyon", "total_rooms": 2, …}` |
+
+**Les 5 idées Python à retenir :**
+
+1. **`isinstance(x, str)`** vérifie le type ; **`.strip()`** enlève les espaces.
+2. **`A or B`** : Python s'arrête dès que `A` est vrai → sert de garde, et `None or 0` → `0`.
+3. **`X if condition else Y`** = un `if/else` sur une ligne.
+4. **`None`, `""`, `0`, `[]`** comptent comme « faux » dans un `if`.
+5. **`json.dumps`** : dictionnaire Python → texte JSON.
+
+**Les 4 outils Django (ORM) à retenir :**
+
+1. **`.filter(champ__iexact=…)`** : chercher sans tenir compte des majuscules.
+2. **`.first()`** : un seul objet ou `None`, sans planter.
+3. **`.aggregate(nom=Sum('champ'))`** : la base fait le calcul, renvoie `{'nom': valeur}`.
+4. **`.values_list('champ', flat=True)`** : seulement une colonne, en liste simple.
 
 ---
 
@@ -489,3 +830,13 @@ Les tests ne doivent jamais être modifiés : un test qui échoue indique ce qu'
 | **`__` (double underscore)** | dans un `filter`, veut dire « aller dans » (`location__city`) |
 | **`iexact`** | égalité sans tenir compte des majuscules/minuscules |
 | **200 / 400 / 405** | codes HTTP : OK / requête invalide / méthode non autorisée |
+| **`isinstance(x, str)`** | vérifie si `x` est du texte |
+| **`raise`** | déclenche une erreur et arrête la fonction |
+| **`ValueError`** | erreur Python standard : « valeur non acceptable » |
+| **`.first()`** | le premier résultat d'un queryset, ou `None` s'il est vide |
+| **`aggregate` / `Sum`** | demander à la base un calcul global (ici une somme) |
+| **`values_list(..., flat=True)`** | récupérer une seule colonne, en liste simple |
+| **`sorted()`** | renvoie une nouvelle liste triée |
+| **`len()`** | compte les éléments d'une liste |
+| **dictionnaire (`dict`)** | paires `'clé': valeur` entre accolades `{}` |
+| **`json.dumps()`** | transforme un dictionnaire Python en texte JSON |
